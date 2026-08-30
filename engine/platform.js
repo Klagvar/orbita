@@ -114,8 +114,17 @@
       .catch(function (err) {
         // error_code 20 — «нет рекламных материалов». Это штатная ситуация,
         // а не поломка: показывать нечего, играем дальше.
-        var code = err && err.error_data ? err.error_data.error_code : null;
-        if (code !== 20) console.warn('[platform-vk] реклама:', err);
+        var d = (err && err.error_data) || {};
+        var code = d.error_code;
+        if (code === 20) return false;
+        // Раскладываем ошибку по полям: в консоли объект печатается как
+        // «Object», и по такому логу ничего не понять.
+        console.warn('[platform-vk] реклама не показана.',
+          'тип:', (err && err.error_type) || '?',
+          'код:', code === undefined ? '?' : code,
+          'причина:', d.error_reason || d.error_msg || '?',
+          '| если код 3 или запросы к ad.mail.ru падают с ERR_BLOCKED_BY_CLIENT —' +
+          ' это блокировщик рекламы в браузере, а не ошибка игры');
         return false;
       });
   };

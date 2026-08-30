@@ -29,6 +29,7 @@
       on: 'вкл',
       off: 'выкл',
       loading: 'Загрузка…',
+      adFailed: 'Реклама недоступна',
       paused: 'Пауза'
     },
     en: {
@@ -53,6 +54,7 @@
       on: 'on',
       off: 'off',
       loading: 'Loading…',
+      adFailed: 'Ad unavailable',
       paused: 'Paused'
     }
   };

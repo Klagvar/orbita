@@ -92,6 +92,7 @@
   var adBusy = false;      // блокирует ввод, пока крутится реклама
 
   var buttons = [];        // хит-зоны UI текущего кадра
+  var toast = { text: '', life: 0 };  // короткое сообщение поверх экрана
 
   /* --- Утилиты -------------------------------------------------------- */
 
@@ -449,6 +450,7 @@
       p.vy *= 0.94;
     }
     shake = Math.max(0, shake - dt * 2.2);
+    if (toast.life > 0) toast.life -= dt;
 
     if (state !== 'play') return;
 
@@ -1048,6 +1050,13 @@
       ctx.fillRect(0, 0, W, H);
     }
 
+    if (toast.life > 0) {
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, toast.life * 2);
+      text(toast.text, cx, H - 92 * us, 15, '#ffd166', 'center', 700);
+      ctx.restore();
+    }
+
     if (state === 'menu') drawMenu(cx);
     else if (state === 'dead') drawDead(cx);
     else if (state === 'shop') drawShop(cx);
@@ -1187,6 +1196,14 @@
 
   /* --- Переходы состояний ------------------------------------------------ */
 
+  /* Короткое сообщение внизу экрана. Нужно, когда действие не
+     сработало по внешней причине — например, реклама не загрузилась:
+     без него кнопка просто молчит, и игрок думает, что игра сломана. */
+  function showToast(msg) {
+    toast.text = msg;
+    toast.life = 2.4;
+  }
+
   function openShop() {
     state = 'shop';
     S.click();
@@ -1212,7 +1229,10 @@
     S.click();
     P.showRewarded().then(function (rewarded) {
       adBusy = false;
-      if (!rewarded) return;
+      if (!rewarded) {
+        showToast(T.t('adFailed'));
+        return;
+      }
       continueUsed = true;
       S.reward();
 
@@ -1244,7 +1264,10 @@
     S.click();
     P.showRewarded().then(function (rewarded) {
       adBusy = false;
-      if (!rewarded) return;
+      if (!rewarded) {
+        showToast(T.t('adFailed'));
+        return;
+      }
       // runCoins уже начислены в die(), реклама даёт вторую такую же порцию.
       save.coins += runCoins;
       runCoins = 0;
