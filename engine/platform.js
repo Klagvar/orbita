@@ -100,23 +100,39 @@
 
   /* --- Реклама ------------------------------------------------------ */
 
+  /* Все ветки логируем. Раньше «нет материалов» и «ответ без награды»
+     молчали, и по логу нельзя было отличить пустой инвентарь от того,
+     что игрок закрыл ролик — а это разные проблемы с разным лечением. */
   Platform.prototype._showAd = function (format, waterfall) {
     var self = this;
-    if (!this.sdk) return Promise.resolve(false);
+    if (!this.sdk) {
+      console.warn('[platform-vk] реклама', format, '— моста нет, запуск вне ВК');
+      return Promise.resolve(false);
+    }
 
     var params = { ad_format: format };
     if (format === 'reward') params.use_waterfall = !!waterfall;
 
+    console.log('[platform-vk] запрос рекламы:', JSON.stringify(params));
+
     return this.sdk.send('VKWebAppShowNativeAds', params)
       .then(function (data) {
-        return !!(data && data.result);
+        var ok = !!(data && data.result);
+        console.log('[platform-vk] ответ рекламы', format + ':',
+          JSON.stringify(data), ok ? '— награда есть' : '— награды нет');
+        return ok;
       })
       .catch(function (err) {
-        // error_code 20 — «нет рекламных материалов». Это штатная ситуация,
-        // а не поломка: показывать нечего, играем дальше.
+        // error_code 20 — «нет рекламных материалов»: показывать нечего,
+        // играем дальше. Не поломка, но знать об этом надо.
         var d = (err && err.error_data) || {};
         var code = d.error_code;
-        if (code === 20) return false;
+        if (code === 20) {
+          console.warn('[platform-vk] реклама', format,
+            '— код 20: нет рекламных материалов. Инвентаря для этого формата' +
+            ' сейчас нет, игра ни при чём');
+          return false;
+        }
         // Раскладываем ошибку по полям: в консоли объект печатается как
         // «Object», и по такому логу ничего не понять.
         console.warn('[platform-vk] реклама не показана.',
