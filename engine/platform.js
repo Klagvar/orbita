@@ -1,25 +1,43 @@
-/* Обёртка над SDK Яндекс Игр.
+/* Обёртка над VK Bridge — платформенный слой для VK Games.
  *
- * Задача файла: игра работает одинаково и на площадке, и локально.
- * Если /sdk.js не загрузился — все методы деградируют в no-op,
- * а не роняют игру. Это же экономит нервы на модерации: 72% отказов
- * приходится на SDK и техбаги, поэтому все вызовы здесь защищены.
+ * Интерфейс тот же, что у engine/platform-yandex.js, поэтому game.js
+ * не знает, на какой площадке он запущен, и не меняется при портировании.
  *
- * Синтаксис намеренно консервативный (без ?. и ??): Яндекс заявляет
- * поддержку Android 5 и iOS 9, а модератор может открыть игру где угодно.
+ * Различия площадок, которые пришлось учесть:
+ *  - у ВК нет аналогов LoadingAPI и GameplayAPI — эти методы пустые;
+ *  - реклама одна на оба формата, вид задаётся параметром ad_format;
+ *  - сохранения идут в VK Storage и привязаны к user_id, а не к домену.
+ *    Это важно: на хостинге статики ВК домен меняется после каждой
+ *    выкладки, и localStorage бы обнулялся. Поэтому облако тут основное,
+ *    а localStorage — только запасной вариант.
+ *
+ * Синтаксис консервативный (без ?. и ??): ВК крутит игры в WebView
+ * на старых Android.
  */
 (function (global) {
   'use strict';
 
-  function feature(sdk, name) {
-    if (!sdk || !sdk.features) return null;
-    return sdk.features[name] || null;
+  // При подключении библиотеки скриптом объект называется vkBridge.
+  function bridge() {
+    return global.vkBridge || null;
+  }
+
+  /* Параметры запуска ВК передаёт в строке адреса: vk_language, vk_platform
+     и прочие. Берём язык оттуда, иначе — из браузера. */
+  function launchParam(name) {
+    var search = global.location.search || '';
+    var pairs = search.replace(/^\?/, '').split('&');
+    for (var i = 0; i < pairs.length; i++) {
+      var kv = pairs[i].split('=');
+      if (decodeURIComponent(kv[0]) === name) return decodeURIComponent(kv[1] || '');
+    }
+    return '';
   }
 
   function Platform() {
     this.sdk = null;
     this.player = null;
-    this.available = false;   // true только если реальный SDK ответил
+    this.available = false;
     this.lang = 'ru';
     this.deviceType = 'desktop';
     this._readySent = false;
@@ -32,156 +50,93 @@
 
   Platform.prototype.init = function () {
     var self = this;
-    var boot;
+    var b = bridge();
 
-    if (global.YaGames && typeof global.YaGames.init === 'function') {
-      boot = global.YaGames.init();
-    } else {
-      boot = Promise.reject(new Error('/sdk.js не подключён'));
+    if (!b) {
+      this.available = false;
+      this.lang = (global.navigator.language || 'ru').slice(0, 2);
+      console.warn('[platform-vk] локальный режим: vk-bridge не подключён');
+      return Promise.resolve(this);
     }
 
-    return boot
-      .then(function (sdk) {
-        self.sdk = sdk;
-        self.available = true;
+    var platform = launchParam('vk_platform');
+    if (platform.indexOf('mobile') === 0) this.deviceType = 'mobile';
+    this.lang = launchParam('vk_language') ||
+      (global.navigator.language || 'ru').slice(0, 2);
 
-        var env = sdk.environment || {};
-        if (env.i18n && env.i18n.lang) self.lang = env.i18n.lang;
+    // VKWebAppInit обязателен и должен уйти до загрузки основных ресурсов.
+    // Вне ВК ответа может не быть вообще — тогда промис висит вечно и игра
+    // не выходит с экрана загрузки. Поэтому гонка с таймаутом.
+    var timeout = new Promise(function (resolve) {
+      global.setTimeout(function () { resolve('timeout'); }, 3000);
+    });
 
-        if (sdk.deviceInfo) {
-          if (sdk.deviceInfo.isMobile && sdk.deviceInfo.isMobile()) self.deviceType = 'mobile';
-          else if (sdk.deviceInfo.isTablet && sdk.deviceInfo.isTablet()) self.deviceType = 'tablet';
-          else if (sdk.deviceInfo.isTV && sdk.deviceInfo.isTV()) self.deviceType = 'tv';
+    return Promise.race([b.send('VKWebAppInit', {}), timeout])
+      .then(function (res) {
+        if (res === 'timeout') {
+          console.warn('[platform-vk] VKWebAppInit не ответил за 3 с — офлайн-режим');
+          self.available = false;
+          return self;
         }
-
-        // scopes:false — не показываем окно авторизации, но сохранения работают
-        return sdk.getPlayer({ scopes: false }).catch(function () { return null; });
-      })
-      .then(function (player) {
-        self.player = player;
+        self.sdk = b;
+        self.available = true;
         return self;
       })
       .catch(function (err) {
         self.available = false;
-        self.lang = (global.navigator.language || 'ru').slice(0, 2);
-        console.warn('[platform] локальный режим:', err && err.message);
+        console.warn('[platform-vk] VKWebAppInit не прошёл:', err);
         return self;
       });
   };
 
   /* --- События загрузки и геймплея ---------------------------------- */
+  /* У ВК аналогов нет. Методы оставлены пустыми, чтобы game.js был общим
+     для всех площадок и не оброс проверками. */
 
-  // Вызывать ровно один раз, когда игрок реально может начать играть.
-  Platform.prototype.ready = function () {
-    if (this._readySent) return;
-    this._readySent = true;
-    var api = feature(this.sdk, 'LoadingAPI');
-    if (api && api.ready) {
-      try { api.ready(); } catch (e) { console.warn('[platform] ready:', e); }
-    }
-  };
-
-  // Геймплей идёт: игрок управляет. Обязательно парно со stop().
-  Platform.prototype.gameplayStart = function () {
-    if (this._gameplayOn) return;
-    this._gameplayOn = true;
-    var api = feature(this.sdk, 'GameplayAPI');
-    if (api && api.start) {
-      try { api.start(); } catch (e) { console.warn('[platform] start:', e); }
-    }
-  };
-
-  // Пауза, меню, проигрыш, реклама, уход со вкладки.
-  Platform.prototype.gameplayStop = function () {
-    if (!this._gameplayOn) return;
-    this._gameplayOn = false;
-    var api = feature(this.sdk, 'GameplayAPI');
-    if (api && api.stop) {
-      try { api.stop(); } catch (e) { console.warn('[platform] stop:', e); }
-    }
-  };
-
-  Platform.prototype.isGameplayOn = function () {
-    return this._gameplayOn;
-  };
+  Platform.prototype.ready = function () { this._readySent = true; };
+  Platform.prototype.gameplayStart = function () { this._gameplayOn = true; };
+  Platform.prototype.gameplayStop = function () { this._gameplayOn = false; };
+  Platform.prototype.isGameplayOn = function () { return this._gameplayOn; };
 
   /* --- Реклама ------------------------------------------------------ */
 
-  // Полноэкранная. Частоту показа регулирует сама платформа, поэтому
-  // зовём спокойно — лишний вызов просто вернёт wasShown === false.
-  // Resolve(true), если реклама действительно была показана.
-  Platform.prototype.showInterstitial = function () {
+  Platform.prototype._showAd = function (format, waterfall) {
     var self = this;
-    return new Promise(function (resolve) {
-      if (!self.sdk || !self.sdk.adv) { resolve(false); return; }
+    if (!this.sdk) return Promise.resolve(false);
 
-      var resumeAfter = self._gameplayOn;
-      var settled = false;
-      function finish(shown) {
-        if (settled) return;
-        settled = true;
-        if (resumeAfter) self.gameplayStart();
-        resolve(!!shown);
-      }
+    var params = { ad_format: format };
+    if (format === 'reward') params.use_waterfall = !!waterfall;
 
-      self.gameplayStop();
-      try {
-        self.sdk.adv.showFullscreenAdv({
-          callbacks: {
-            onClose: function (wasShown) { finish(wasShown); },
-            onError: function (error) { console.warn('[adv] fullscreen:', error); finish(false); }
-          }
-        });
-      } catch (e) {
-        console.warn('[adv] fullscreen throw:', e);
-        finish(false);
-      }
-    });
+    return this.sdk.send('VKWebAppShowNativeAds', params)
+      .then(function (data) {
+        return !!(data && data.result);
+      })
+      .catch(function (err) {
+        // error_code 20 — «нет рекламных материалов». Это штатная ситуация,
+        // а не поломка: показывать нечего, играем дальше.
+        var code = err && err.error_data ? err.error_data.error_code : null;
+        if (code !== 20) console.warn('[platform-vk] реклама:', err);
+        return false;
+      });
   };
 
-  // Реклама за вознаграждение. Частота не ограничена платформой —
-  // это главный источник дохода, поэтому награду выдаём строго
-  // по onRewarded, а не по onClose.
+  Platform.prototype.showInterstitial = function () {
+    return this._showAd('interstitial', false);
+  };
+
+  // use_waterfall: true — если ролика с вознаграждением нет, ВК покажет
+  // межэкранный. Игрок всё равно посмотрел рекламу, поэтому награду выдаём.
   Platform.prototype.showRewarded = function () {
-    var self = this;
-    return new Promise(function (resolve) {
-      if (!self.sdk || !self.sdk.adv) { resolve(false); return; }
-
-      var rewarded = false;
-      var resumeAfter = self._gameplayOn;
-      var settled = false;
-      function finish() {
-        if (settled) return;
-        settled = true;
-        if (resumeAfter) self.gameplayStart();
-        resolve(rewarded);
-      }
-
-      self.gameplayStop();
-      try {
-        self.sdk.adv.showRewardedVideo({
-          callbacks: {
-            onRewarded: function () { rewarded = true; },
-            onClose: function () { finish(); },
-            onError: function (error) { console.warn('[adv] rewarded:', error); finish(); }
-          }
-        });
-      } catch (e) {
-        console.warn('[adv] rewarded throw:', e);
-        finish();
-      }
-    });
+    return this._showAd('reward', true);
   };
 
   /* --- Сохранения ---------------------------------------------------- */
-  /* Пишем и в облако игрока, и в localStorage. Читаем облако, а если
-     его нет (гость, оффлайн, локальный запуск) — падаем на localStorage. */
-
-  var LS_KEY = 'save';
+  /* Ключ VK Storage допускает только [a-zA-Z_\-0-9], значение — строка
+     до 4096 символов. Наше сохранение занимает около сотни. */
 
   Platform.prototype.load = function (localKey) {
     var self = this;
-    var key = localKey || LS_KEY;
+    var key = localKey || 'save';
 
     function fromLocal() {
       try {
@@ -190,67 +145,50 @@
       } catch (e) { return null; }
     }
 
-    if (!this.player || !this.player.getData) {
-      return Promise.resolve(fromLocal());
-    }
+    if (!this.sdk) return Promise.resolve(fromLocal());
 
-    return this.player.getData([LS_KEY])
+    return this.sdk.send('VKWebAppStorageGet', { keys: [key] })
       .then(function (data) {
-        if (data && data[LS_KEY]) return data[LS_KEY];
+        var list = (data && data.keys) || [];
+        for (var i = 0; i < list.length; i++) {
+          if (list[i].key === key && list[i].value) {
+            try { return JSON.parse(list[i].value); } catch (e) { return fromLocal(); }
+          }
+        }
         return fromLocal();
       })
       .catch(function () { return fromLocal(); });
   };
 
-  // Троттлим: setData нельзя дёргать на каждый кадр.
+  // Троттлим: у VK Storage лимит 1000 вызовов в час на пользователя.
   Platform.prototype.save = function (state, localKey) {
     var self = this;
-    var key = localKey || LS_KEY;
+    var key = localKey || 'save';
 
     try { global.localStorage.setItem(key, JSON.stringify(state)); } catch (e) { /* приватный режим */ }
 
-    if (!this.player || !this.player.setData) return;
+    if (!this.sdk) return;
 
     this._saveQueue = state;
     if (this._saveTimer) return;
     this._saveTimer = global.setTimeout(function () {
       self._saveTimer = null;
-      var payload = {};
-      payload[LS_KEY] = self._saveQueue;
       try {
-        self.player.setData(payload, false).catch(function (e) {
-          console.warn('[platform] setData:', e);
-        });
-      } catch (e) { console.warn('[platform] setData throw:', e); }
+        self.sdk.send('VKWebAppStorageSet', {
+          key: key,
+          value: JSON.stringify(self._saveQueue)
+        }).catch(function (e) { console.warn('[platform-vk] StorageSet:', e); });
+      } catch (e) { console.warn('[platform-vk] StorageSet throw:', e); }
     }, 3000);
   };
 
   /* --- Лидерборд ------------------------------------------------------ */
-  /* Лидерборд нужно предварительно создать в Консоли разработчика.
-     Пока он не создан — вызов просто молча упадёт в catch. */
+  /* В кабинете ВК есть «Таблица результатов», но её API я ещё не сверял
+     по документации. До тех пор — заглушка: игра от этого не ломается,
+     рекорд просто не уезжает в общий рейтинг. */
 
-  Platform.prototype.submitScore = function (boardName, score) {
-    if (!this.sdk || !this.sdk.leaderboards) return Promise.resolve(false);
-    try {
-      return this.sdk.leaderboards.setScore(boardName, Math.round(score))
-        .then(function () { return true; })
-        .catch(function (e) { console.warn('[lb] setScore:', e); return false; });
-    } catch (e) {
-      return Promise.resolve(false);
-    }
-  };
-
-  Platform.prototype.getTopScores = function (boardName, count) {
-    if (!this.sdk || !this.sdk.leaderboards) return Promise.resolve([]);
-    try {
-      return this.sdk.leaderboards
-        .getEntries(boardName, { quantityTop: count || 10, includeUser: true, quantityAround: 3 })
-        .then(function (res) { return (res && res.entries) || []; })
-        .catch(function () { return []; });
-    } catch (e) {
-      return Promise.resolve([]);
-    }
-  };
+  Platform.prototype.submitScore = function () { return Promise.resolve(false); };
+  Platform.prototype.getTopScores = function () { return Promise.resolve([]); };
 
   global.Platform = new Platform();
 })(window);

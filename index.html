@@ -50,8 +50,10 @@
 <body>
 <canvas id="game"></canvas>
 
-<!-- SDK площадки. Локально файла нет — platform.js это переживает. -->
-<script src="/sdk.js"></script>
+<!-- SDK площадки подставляет build.py по цели сборки: для Яндекса /sdk.js,
+     для ВК локальная копия vk-bridge. Локально файла нет — платформенный
+     слой это переживает и уходит в офлайн-режим. -->
+<script src="engine/vk-bridge.min.js"></script>
 <script src="engine/i18n.js"></script>
 <script src="engine/audio.js"></script>
 <script src="engine/core.js"></script>
