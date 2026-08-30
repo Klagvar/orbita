@@ -8,7 +8,7 @@
  *   rewarded «Продолжить»  — один раз за забег, в момент максимальной
  *                            досады игрока (самый дорогой момент для показа);
  *   rewarded «Удвоить»     — на монеты забега;
- *   fullscreen             — раз в 3 забега перед стартом.
+ *   fullscreen             — редко, раз в INTERSTITIAL_EVERY забегов.
  */
 (function (global) {
   'use strict';
@@ -58,6 +58,12 @@
   var TAU = Math.PI * 2;
 
   var LB_NAME = 'orbita_best';
+
+  // Раз во сколько забегов показывать принудительную полноэкранную рекламу.
+  // Ролики у ВК бывают длинными (попадались двухминутные), а забег длится
+  // секунды. Частый форсированный показ выгоняет игрока насовсем, поэтому
+  // ставка на rewarded — его игрок выбирает сам. Это одно число, крутить сюда.
+  var INTERSTITIAL_EVERY = 6;
 
   /* --- Состояние ------------------------------------------------------ */
 
@@ -535,9 +541,12 @@
       }
     }
 
-    // Камера едет только вверх.
+    // Камера едет только вверх — кроме случая, когда метеор висит на спутнике
+    // чёрной дыры. Спутник сам уезжает вниз по эллипсу и утаскивает игрока
+    // за нижний край экрана, поэтому за ним камера следует в обе стороны.
+    var onSatellite = ball.mode === 'orbit' && ball.anchor && ball.anchor.host;
     var target = ball.y - 150;
-    if (target < camY) camY = lerp(camY, target, Math.min(1, dt * 5));
+    if (target < camY || onSatellite) camY = lerp(camY, target, Math.min(1, dt * 5));
 
     // Горизонт событий: коснулся — забег окончен.
     for (i = 0; i < holes.length; i++) {
@@ -551,8 +560,12 @@
       }
     }
 
-    var bottom = camY + (H * 0.5) / scale + 40;
-    if (ball.y > bottom || Math.abs(ball.x) > HALF_W + 80) die();
+    // За края убиваем только в полёте. Пока метеор висит на звезде, игрок
+    // ничего не решает — умирать там не за что.
+    if (ball.mode === 'fly') {
+      var bottom = camY + (H * 0.5) / scale + 40;
+      if (ball.y > bottom || Math.abs(ball.x) > HALF_W + 80) die();
+    }
   }
 
   /* --- Рендер ----------------------------------------------------------- */
@@ -1213,7 +1226,8 @@
     S.click();
     runs++;
     // Полноэкранная — раз в 3 забега; частоту всё равно режет платформа.
-    var pre = (runs > 1 && runs % 3 === 1) ? P.showInterstitial() : Promise.resolve(false);
+    var pre = (runs > 1 && runs % INTERSTITIAL_EVERY === 1)
+      ? P.showInterstitial() : Promise.resolve(false);
     adBusy = true;
     pre.then(function () {
       adBusy = false;
