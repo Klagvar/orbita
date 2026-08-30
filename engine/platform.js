@@ -38,6 +38,9 @@
     this.sdk = null;
     this.player = null;
     this.available = false;
+    // Оптимистично по умолчанию: пока не спросили — считаем, что ролик есть.
+    this.rewardedReady = true;
+    this._adCheckLogged = false;
     this.lang = 'ru';
     this.deviceType = 'desktop';
     this._readySent = false;
@@ -153,6 +156,38 @@
   // межэкранный. Игрок всё равно посмотрел рекламу, поэтому награду выдаём.
   Platform.prototype.showRewarded = function () {
     return this._showAd('reward', true);
+  };
+
+  /* Есть ли ролик с вознаграждением прямо сейчас. Спрашиваем заранее, чтобы
+     не показывать кнопку, которая заведомо ответит «награда не засчитана»:
+     у новых приложений инвентаря rewarded часто нет вовсе.
+
+     При любом сбое считаем, что реклама есть. У метода была давняя болезнь —
+     он всегда возвращал false; если она вернётся, лучше показать кнопку,
+     которая иногда не сработает, чем спрятать работающую. */
+  Platform.prototype.checkRewarded = function () {
+    var self = this;
+    if (!this.sdk) return Promise.resolve(this.rewardedReady);
+
+    return this.sdk.send('VKWebAppCheckNativeAds', { ad_format: 'reward' })
+      .then(function (data) {
+        var ready = !!(data && data.result);
+        if (!self._adCheckLogged || ready !== self.rewardedReady) {
+          console.log('[platform-vk] доступность reward:', ready,
+            '| ответ:', JSON.stringify(data));
+          self._adCheckLogged = true;
+        }
+        self.rewardedReady = ready;
+        return ready;
+      })
+      .catch(function (err) {
+        var d = (err && err.error_data) || {};
+        console.warn('[platform-vk] проверка рекламы не прошла —',
+          'считаем, что реклама есть. код:',
+          d.error_code === undefined ? '?' : d.error_code);
+        self.rewardedReady = true;
+        return true;
+      });
   };
 
   /* --- Сохранения ---------------------------------------------------- */
