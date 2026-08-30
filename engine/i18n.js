@@ -29,7 +29,7 @@
       on: 'вкл',
       off: 'выкл',
       loading: 'Загрузка…',
-      adFailed: 'Реклама недоступна',
+      adFailed: 'Награда не засчитана',
       paused: 'Пауза'
     },
     en: {
@@ -54,7 +54,7 @@
       on: 'on',
       off: 'off',
       loading: 'Loading…',
-      adFailed: 'Ad unavailable',
+      adFailed: 'No reward granted',
       paused: 'Paused'
     }
   };
