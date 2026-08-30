@@ -40,7 +40,6 @@
     this.available = false;
     // Оптимистично по умолчанию: пока не спросили — считаем, что ролик есть.
     this.rewardedReady = true;
-    this._adCheckLogged = false;
     this.lang = 'ru';
     this.deviceType = 'desktop';
     this._readySent = false;
@@ -116,13 +115,16 @@
     var params = { ad_format: format };
     if (format === 'reward') params.use_waterfall = !!waterfall;
 
-    console.log('[platform-vk] запрос рекламы:', JSON.stringify(params));
-
     return this.sdk.send('VKWebAppShowNativeAds', params)
       .then(function (data) {
         var ok = !!(data && data.result);
-        console.log('[platform-vk] ответ рекламы', format + ':',
-          JSON.stringify(data), ok ? '— награда есть' : '— награды нет');
+        // Успех молчит. Ответ без ошибки, но и без награды — аномалия:
+        // раньше этот путь молчал, и по логу нельзя было понять, что
+        // произошло. Оставляем.
+        if (!ok) {
+          console.warn('[platform-vk] реклама', format,
+            '— ответ без награды:', JSON.stringify(data));
+        }
         return ok;
       })
       .catch(function (err) {
@@ -171,14 +173,10 @@
 
     return this.sdk.send('VKWebAppCheckNativeAds', { ad_format: 'reward' })
       .then(function (data) {
-        var ready = !!(data && data.result);
-        if (!self._adCheckLogged || ready !== self.rewardedReady) {
-          console.log('[platform-vk] доступность reward:', ready,
-            '| ответ:', JSON.stringify(data));
-          self._adCheckLogged = true;
-        }
-        self.rewardedReady = ready;
-        return ready;
+        // Результат не логируем: он и так виден в игре — есть инвентарь,
+        // значит на экране смерти есть кнопка.
+        self.rewardedReady = !!(data && data.result);
+        return self.rewardedReady;
       })
       .catch(function (err) {
         var d = (err && err.error_data) || {};
