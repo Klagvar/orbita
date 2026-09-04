@@ -40,6 +40,9 @@
     this.available = false;
     // Оптимистично по умолчанию: пока не спросили — считаем, что ролик есть.
     this.rewardedReady = true;
+    // Код последнего отказа рекламы — его забирает аналитика. Без него
+    // «не показалось» неотличимо от «игрок закрыл ролик».
+    this.lastAdError = null;
     this.lang = 'ru';
     this.deviceType = 'desktop';
     this._readySent = false;
@@ -118,6 +121,7 @@
     return this.sdk.send('VKWebAppShowNativeAds', params)
       .then(function (data) {
         var ok = !!(data && data.result);
+        self.lastAdError = ok ? null : 'noresult';
         // Успех молчит. Ответ без ошибки, но и без награды — аномалия:
         // раньше этот путь молчал, и по логу нельзя было понять, что
         // произошло. Оставляем.
@@ -132,6 +136,7 @@
         // играем дальше. Не поломка, но знать об этом надо.
         var d = (err && err.error_data) || {};
         var code = d.error_code;
+        self.lastAdError = code === undefined ? (err && err.error_type) || 'unknown' : code;
         if (code === 20) {
           console.warn('[platform-vk] реклама', format,
             '— код 20: нет рекламных материалов. Инвентаря для этого формата' +

@@ -16,6 +16,7 @@
   var P = global.Platform;
   var S = global.Sound;
   var T = global.I18n;
+  var A = global.Analytics;
 
   /* --- Константы мира (в мировых единицах) --------------------------- */
 
@@ -96,6 +97,11 @@
   var continueUsed = false;
   var newBest = false;
   var adBusy = false;      // блокирует ввод, пока крутится реклама
+
+  // Что игрок успел увидеть за забег: в статистику уезжает только этот
+  // набор, по нему видно, доходит ли кто-нибудь до поздних механик.
+  var runAt = 0;           // время старта забега
+  var seen = {};           // типы звёзд и порталы, реально пройденные
 
   var buttons = [];        // хит-зоны UI текущего кадра
   var toast = { text: '', life: 0 };  // короткое сообщение поверх экрана
@@ -334,6 +340,8 @@
     ball.radius = star.r + ORBIT_GAP;
     ball.flyTime = 0;
     if (star.type === 'fragile' && star.decay < 0) star.decay = FRAGILE_LIFE;
+    // 'sat' — спутник чёрной дыры, то есть механика «система».
+    seen[star.type === 'sat' ? 'system' : star.type] = 1;
   }
 
   function syncOrbitPosition() {
@@ -360,6 +368,8 @@
     newBest = false;
     camY = 0;
     shake = 0;
+    seen = {};
+    runAt = Date.now();
 
     var first = spawnNext();
     ensureStars();
@@ -416,6 +426,14 @@
     }
     persist();
     if (newBest && score > 0) P.submitScore(LB_NAME, save.best);
+
+    A.event('run_end', {
+      n: runs, score: score, best: save.best, coins: runCoins,
+      dur: Math.round((Date.now() - runAt) / 1000),
+      cont: continueUsed ? 1 : 0,
+      seen: seen
+    });
+    A.flush(false);
 
     // Обновляем доступность ролика к следующему экрану смерти. Ответ придёт
     // асинхронно, поэтому текущий экран рисуется по прошлому значению —
@@ -504,6 +522,7 @@
             ball.vy = -FLY_SPEED;
             ball.flyTime = 0;
             ball.portalCd = 0.4;
+            seen.portal = 1;
             trail = [];
             burst(ball.x, ball.y, 12, '#f472b6');
             S.portal();
@@ -1233,15 +1252,27 @@
     S.click();
     runs++;
     // Полноэкранная — раз в 3 забега; частоту всё равно режет платформа.
-    var pre = (runs > 1 && runs % INTERSTITIAL_EVERY === 1)
-      ? P.showInterstitial() : Promise.resolve(false);
+    var wantAd = (runs > 1 && runs % INTERSTITIAL_EVERY === 1);
+    A.event('run_start', { n: runs, ad: wantAd ? 1 : 0 });
+    var pre = wantAd ? P.showInterstitial() : Promise.resolve(false);
     adBusy = true;
-    pre.then(function () {
+    pre.then(function (shown) {
+      if (wantAd) A.event('ad', adInfo('interstitial', 'pre', shown));
       adBusy = false;
       resetRun();
       state = 'play';
       P.gameplayStart();
     });
+  }
+
+  /* Одно место, где собирается всё про показ рекламы: формат, откуда
+     вызвали, показалось ли, и код отказа от площадки. Без кода отказа
+     нельзя отличить пустой инвентарь от закрытого игроком ролика, а это
+     разные проблемы. */
+  function adInfo(format, src, ok) {
+    var o = { f: format, s: src, ok: ok ? 1 : 0, dev: P.deviceType || '?' };
+    if (!ok && P.lastAdError !== undefined && P.lastAdError !== null) o.err = P.lastAdError;
+    return o;
   }
 
   function doContinue() {
@@ -1250,8 +1281,10 @@
     S.click();
     P.showRewarded().then(function (rewarded) {
       adBusy = false;
+      A.event('ad', adInfo('reward', 'continue', rewarded));
       if (!rewarded) {
         showToast(T.t('adFailed'));
+        A.flush(false);
         return;
       }
       continueUsed = true;
@@ -1285,8 +1318,10 @@
     S.click();
     P.showRewarded().then(function (rewarded) {
       adBusy = false;
+      A.event('ad', adInfo('reward', 'x2', rewarded));
       if (!rewarded) {
         showToast(T.t('adFailed'));
+        A.flush(false);
         return;
       }
       // runCoins уже начислены в die(), реклама даёт вторую такую же порцию.
@@ -1354,6 +1389,9 @@
   }
 
   function boot() {
+    // До всего остального: события до init() просто теряются.
+    A.init('orbita');
+
     core = new global.Core('game');
     core.onResize = layout;
     core.onUpdate = update;
@@ -1387,7 +1425,15 @@
       // Всё готово, игрок может играть — сообщаем площадке ровно один раз.
       P.ready();
       // Спрашиваем про рекламу заранее, чтобы к первой смерти ответ был.
-      P.checkRewarded();
+      P.checkRewarded().then(function (has) {
+        A.event('ready', {
+          dev: P.deviceType || '?',
+          sdk: P.available ? 1 : 0,
+          rew: has ? 1 : 0,
+          best: save.best
+        });
+        A.flush(false);
+      });
     });
   }
 
