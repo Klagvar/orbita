@@ -67,6 +67,13 @@
     // Ограничиваем DPR: на 3x-телефонах полноэкранный канвас душит fps.
     var dpr = Math.min(global.devicePixelRatio || 1, 2);
 
+    /* Размер не изменился — уходим. Присваивание canvas.width заново
+       выделяет буфер кадра и стирает его, это одна из самых дорогих
+       операций в кадре. Рекламный баннер выезжает анимацией и сыплет
+       десятками событий resize подряд; без этой проверки игра на них
+       ощутимо застревает. */
+    if (w === this.width && h === this.height && dpr === this.dpr) return;
+
     this.width = w;
     this.height = h;
     this.dpr = dpr;
@@ -82,12 +89,19 @@
   Core.prototype._bindResize = function () {
     var self = this;
     var pending = null;
+    var last = 0;
     function schedule() {
       // Поворот экрана на мобильных сообщает старые размеры,
       // поэтому пересчитываем ещё раз следующим кадром.
+      // Немедленную пересборку придерживаем: во время анимации баннера
+      // событий приходят десятки, и каждое стоит буфера кадра.
+      var now = Date.now();
+      if (now - last > 120) { last = now; self.resize(); }
       if (pending) global.clearTimeout(pending);
-      self.resize();
-      pending = global.setTimeout(function () { self.resize(); }, 250);
+      pending = global.setTimeout(function () {
+        last = Date.now();
+        self.resize();
+      }, 250);
     }
     global.addEventListener('resize', schedule, false);
     global.addEventListener('orientationchange', schedule, false);
