@@ -95,6 +95,7 @@
   var score = 0;
   var runCoins = 0;
   var continueUsed = false;
+  var adOffer = '';        // какое предложение рекламы уже засчитано на этом экране смерти
   var newBest = false;
   var adBusy = false;      // блокирует ввод, пока крутится реклама
 
@@ -414,6 +415,7 @@
   function die() {
     if (state !== 'play') return;
     state = 'dead';
+    adOffer = '';
     shake = 1;
     S.death();
     burst(ball.x, ball.y, 22, '#ff5470');
@@ -1116,15 +1118,25 @@
     // Показываем ровно одну rewarded-кнопку: продолжить важнее удвоения.
     // rewardedReady — ответ площадки на «есть ли сейчас ролик». Без него
     // игрок жмёт кнопку, ждёт и получает «награда не засчитана».
-    var adAction = null, adLabel = '';
+    var adAction = null, adLabel = '', adKind = '';
     if (P.available && P.rewardedReady) {
       if (!continueUsed && score > 0) {
         adAction = doContinue;
         adLabel = '▶ ' + T.t('continueAd');
+        adKind = 'continue';
       } else if (runCoins > 0) {
         adAction = doDoubleCoins;
         adLabel = '×2  ◈' + runCoins;
+        adKind = 'x2';
       }
+    }
+
+    /* Экран рисуется каждый кадр, поэтому предложение считаем один раз за
+       смерть. Без этой отметки видны только нажатия, а сколько игроков
+       кнопку вообще увидели — нет, и конверсия в показ не считается. */
+    if (adKind && adOffer !== adKind) {
+      adOffer = adKind;
+      A.event('ad_offer', { s: adKind, dev: P.deviceType || '?' });
     }
 
     var cy = H * 0.44;
@@ -1257,7 +1269,13 @@
     var pre = wantAd ? P.showInterstitial() : Promise.resolve(false);
     adBusy = true;
     pre.then(function (shown) {
+      adBusy = false;
       if (wantAd) A.event('ad', adInfo('interstitial', 'pre', shown));
+      resetRun();
+      state = 'play';
+      P.gameplayStart();
+    }).catch(function () {
+      // Забег важнее рекламы: что бы ни случилось с показом, играть можно.
       adBusy = false;
       resetRun();
       state = 'play';
@@ -1309,6 +1327,9 @@
       ensureStars();
       state = 'play';
       P.gameplayStart();
+    }).catch(function () {
+      adBusy = false;
+      showToast(T.t('adFailed'));
     });
   }
 
@@ -1329,6 +1350,9 @@
       runCoins = 0;
       S.reward();
       persist();
+    }).catch(function () {
+      adBusy = false;
+      showToast(T.t('adFailed'));
     });
   }
 
@@ -1424,6 +1448,13 @@
     }).then(function () {
       // Всё готово, игрок может играть — сообщаем площадке ровно один раз.
       P.ready();
+      /* Баннер поднимаем здесь, а не раньше: до этой точки игрок смотрит
+         на экран загрузки, а показ меняет размер окна и пересобирает
+         канвас. Пусть перестройка случится, пока смотреть не на что. */
+      P.onBannerClosed = function () { A.event('ad', adInfo('banner', 'closed', 0)); };
+      P.showBanner().then(function (shown) {
+        A.event('ad', adInfo('banner', 'boot', shown));
+      });
       // Спрашиваем про рекламу заранее, чтобы к первой смерти ответ был.
       P.checkRewarded().then(function (has) {
         A.event('ready', {

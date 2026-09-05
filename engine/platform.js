@@ -43,6 +43,10 @@
     // Код последнего отказа рекламы — его забирает аналитика. Без него
     // «не показалось» неотличимо от «игрок закрыл ролик».
     this.lastAdError = null;
+    // Висит ли сейчас баннер. Нужен только для отчётности: показ и скрытие
+    // мы не чередуем, см. showBanner.
+    this.bannerShown = false;
+    this.onBannerClosed = null;
     this.lang = 'ru';
     this.deviceType = 'desktop';
     this._readySent = false;
@@ -85,6 +89,7 @@
         }
         self.sdk = b;
         self.available = true;
+        self._watchBanner();
         return self;
       })
       .catch(function (err) {
@@ -105,6 +110,11 @@
 
   /* --- Реклама ------------------------------------------------------ */
 
+  /* Сколько ждём ответа от моста, прежде чем считать показ несостоявшимся.
+     Больше десяти секунд ждать нечего: игрок к этому моменту уже решил,
+     что игра сломалась. */
+  var AD_TIMEOUT = 10000;
+
   /* Все ветки логируем. Раньше «нет материалов» и «ответ без награды»
      молчали, и по логу нельзя было отличить пустой инвентарь от того,
      что игрок закрыл ролик — а это разные проблемы с разным лечением. */
@@ -118,7 +128,27 @@
     var params = { ad_format: format };
     if (format === 'reward') params.use_waterfall = !!waterfall;
 
-    return this.sdk.send('VKWebAppShowNativeAds', params)
+    /* Мост не обязан ответить. Наблюдалось живьём: игрок жмёт «продолжить
+       за рекламу», ролика нет, ответа нет — и обещание не выполняется
+       никогда. Игра при этом стоит на паузе и перестаёт принимать нажатия.
+       Поэтому у показа есть срок: не ответили за AD_TIMEOUT — считаем, что
+       рекламы нет, и отпускаем игру. */
+    return new Promise(function (resolve) {
+      var settled = false;
+      function finish(ok) {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(ok);
+      }
+      var timer = setTimeout(function () {
+        self.lastAdError = 'timeout';
+        console.warn('[platform-vk] реклама', format, '— мост молчит',
+          AD_TIMEOUT, 'мс, продолжаем без неё');
+        finish(false);
+      }, AD_TIMEOUT);
+
+      self.sdk.send('VKWebAppShowNativeAds', params)
       .then(function (data) {
         var ok = !!(data && data.result);
         self.lastAdError = ok ? null : 'noresult';
@@ -129,7 +159,7 @@
           console.warn('[platform-vk] реклама', format,
             '— ответ без награды:', JSON.stringify(data));
         }
-        return ok;
+        finish(ok);
       })
       .catch(function (err) {
         // error_code 20 — «нет рекламных материалов»: показывать нечего,
@@ -141,7 +171,8 @@
           console.warn('[platform-vk] реклама', format,
             '— код 20: нет рекламных материалов. Инвентаря для этого формата' +
             ' сейчас нет, игра ни при чём');
-          return false;
+          finish(false);
+          return;
         }
         // Раскладываем ошибку по полям: в консоли объект печатается как
         // «Object», и по такому логу ничего не понять.
@@ -151,8 +182,9 @@
           'причина:', d.error_reason || d.error_msg || '?',
           '| если код 3 или запросы к ad.mail.ru падают с ERR_BLOCKED_BY_CLIENT —' +
           ' это блокировщик рекламы в браузере, а не ошибка игры');
-        return false;
+        finish(false);
       });
+    });
   };
 
   Platform.prototype.showInterstitial = function () {
@@ -191,6 +223,70 @@
         self.rewardedReady = true;
         return true;
       });
+  };
+
+  /* --- Баннер --------------------------------------------------------- */
+
+  /* Баннер — единственный формат, который приносит показы сам, без действий
+     игрока: он висит, пока открыта игра. Остальные упираются либо в частоту,
+     которую режет площадка, либо в готовность игрока нажать кнопку. При
+     одном показе на игрока, который мы намеряли, это главный рычаг.
+
+     Показываем один раз на старте и больше не трогаем. Прятать на время
+     забега заманчиво, но без layout_type ВК меняет размер окна, а мы на
+     это пересобираем канвас — посреди забега это подножка игроку. Одна
+     перестройка на загрузке стоит дешевле всех последующих.
+
+     banner_location: 'bottom' — низ у нас свободнее верха: сверху счёт,
+     снизу только переключатель звука, и тот уедет вместе с канвасом. */
+  Platform.prototype.showBanner = function () {
+    var self = this;
+    if (!this.sdk) return Promise.resolve(false);
+
+    return this.sdk.send('VKWebAppShowBannerAd', { banner_location: 'bottom' })
+      .then(function (data) {
+        var ok = !!(data && data.result);
+        self.bannerShown = ok;
+        self.lastAdError = ok ? null : 'noresult';
+        if (!ok) {
+          console.warn('[platform-vk] баннер — ответ без результата:',
+            JSON.stringify(data));
+        }
+        return ok;
+      })
+      .catch(function (err) {
+        var d = (err && err.error_data) || {};
+        var code = d.error_code;
+        self.lastAdError = code === undefined ? (err && err.error_type) || 'unknown' : code;
+        self.bannerShown = false;
+        console.warn('[platform-vk] баннер не показан.',
+          'тип:', (err && err.error_type) || '?',
+          'код:', code === undefined ? '?' : code,
+          'причина:', d.error_reason || d.error_msg || '?');
+        return false;
+      });
+  };
+
+  Platform.prototype.hideBanner = function () {
+    var self = this;
+    if (!this.sdk) return Promise.resolve(false);
+    return this.sdk.send('VKWebAppHideBannerAd', {})
+      .then(function () { self.bannerShown = false; return true; })
+      .catch(function () { return false; });
+  };
+
+  /* Игрок может закрыть баннер крестиком. Тогда показов больше не будет, и
+     это надо видеть в отчёте: если закрывают массово, формат нам не подходит
+     и место под ним лучше вернуть игре. */
+  Platform.prototype._watchBanner = function () {
+    var self = this;
+    if (!this.sdk || !this.sdk.subscribe) return;
+    this.sdk.subscribe(function (e) {
+      var type = e && e.detail && e.detail.type;
+      if (type !== 'VKWebAppBannerAdClosedByUser') return;
+      self.bannerShown = false;
+      if (self.onBannerClosed) self.onBannerClosed();
+    });
   };
 
   /* --- Сохранения ---------------------------------------------------- */
