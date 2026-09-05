@@ -1380,8 +1380,22 @@
 
      Просим повторно после смерти, если баннера ещё нет: на старте материала
      могло не найтись, а через минуту игры он появится. */
+  /* Повторы приходится ограничивать. Условие «не просить, если баннер уже
+     висит» не спасает в единственном важном случае — когда он не появляется
+     вообще: тогда мы просим на каждой смерти, за сессию это выходит под
+     сотню запросов, и площадка отвечает «Requests limit reached». Своими
+     руками выбитый лимит бьёт заодно и по межэкранной рекламе. */
+  var BANNER_TRIES = 3;
+  var BANNER_GAP = 60000;
+  var bannerTries = 0;
+  var bannerAt = 0;
+
   function showBanner(where) {
-    if (P.bannerShown) return;
+    if (P.bannerShown || bannerTries >= BANNER_TRIES) return;
+    var now = Date.now();
+    if (bannerAt && now - bannerAt < BANNER_GAP) return;
+    bannerTries++;
+    bannerAt = now;
     P.showBanner().then(function (shown) {
       A.event('ad', adInfo('banner', where, shown));
     });
