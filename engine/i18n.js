@@ -30,6 +30,7 @@
       off: 'выкл',
       loading: 'Загрузка…',
       adFailed: 'Награда не засчитана',
+      adWait: 'Загружаем рекламу…',
       paused: 'Пауза'
     },
     en: {
@@ -55,6 +56,7 @@
       off: 'off',
       loading: 'Loading…',
       adFailed: 'No reward granted',
+      adWait: 'Loading ad…',
       paused: 'Paused'
     }
   };

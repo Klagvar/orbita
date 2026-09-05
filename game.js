@@ -1297,6 +1297,9 @@
     if (adBusy) return;
     adBusy = true;
     S.click();
+    // Ввод на это время закрыт, поэтому экран обязан сказать, что он занят,
+    // а не просто перестать отзываться.
+    showToast(T.t('adWait'));
     P.showRewarded().then(function (rewarded) {
       adBusy = false;
       A.event('ad', adInfo('reward', 'continue', rewarded));
@@ -1337,6 +1340,7 @@
     if (adBusy) return;
     adBusy = true;
     S.click();
+    showToast(T.t('adWait'));
     P.showRewarded().then(function (rewarded) {
       adBusy = false;
       A.event('ad', adInfo('reward', 'x2', rewarded));
