@@ -1311,6 +1311,9 @@
   function adInfo(format, src, ok) {
     var o = { f: format, s: src, ok: ok ? 1 : 0, dev: P.deviceType || '?' };
     if (!ok && P.lastAdError !== undefined && P.lastAdError !== null) o.err = P.lastAdError;
+    // Причина словами: списка кодов у рекламных методов ВК нет нигде, так что
+    // расшифровку берём из ответа площадки, а не из документации.
+    if (!ok && P.lastAdReason) o.why = String(P.lastAdReason).slice(0, 120);
     return o;
   }
 

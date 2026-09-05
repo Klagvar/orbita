@@ -43,6 +43,11 @@
     // Код последнего отказа рекламы — его забирает аналитика. Без него
     // «не показалось» неотличимо от «игрок закрыл ролик».
     this.lastAdError = null;
+    /* И словами тоже. Список кодов рекламных методов ВК нигде не опубликован:
+       про 20 мы знаем только из своего опыта, а что означает 13 — не знает
+       никто, кого удалось найти. Зато площадка присылает причину текстом,
+       так что пусть она сама и объяснит, а мы прочитаем это в отчёте. */
+    this.lastAdReason = null;
     // Висит ли сейчас баннер. Нужен только для отчётности: показ и скрытие
     // мы не чередуем, см. showBanner.
     this.bannerShown = false;
@@ -203,6 +208,7 @@
       .then(function (data) {
         var ok = !!(data && data.result);
         self.lastAdError = ok ? null : 'noresult';
+        if (ok) self.lastAdReason = null;
         // Успех молчит. Ответ без ошибки, но и без награды — аномалия:
         // раньше этот путь молчал, и по логу нельзя было понять, что
         // произошло. Оставляем.
@@ -218,6 +224,7 @@
         var d = (err && err.error_data) || {};
         var code = d.error_code;
         self.lastAdError = code === undefined ? (err && err.error_type) || 'unknown' : code;
+        self.lastAdReason = d.error_reason || d.error_msg || null;
         if (code === 20) {
           console.warn('[platform-vk] реклама', format,
             '— код 20: нет рекламных материалов. Инвентаря для этого формата' +
@@ -303,6 +310,7 @@
         var ok = !!(data && data.result);
         self.bannerShown = ok;
         self.lastAdError = ok ? null : 'noresult';
+        if (ok) self.lastAdReason = null;
         if (ok && !self._bannerWanted) {
           // Пока ВК думал, забег успел начаться. Убираем немедленно.
           console.warn('[platform-vk] баннер приехал не вовремя — прячем');
@@ -319,6 +327,7 @@
         var d = (err && err.error_data) || {};
         var code = d.error_code;
         self.lastAdError = code === undefined ? (err && err.error_type) || 'unknown' : code;
+        self.lastAdReason = d.error_reason || d.error_msg || null;
         self.bannerShown = false;
         console.warn('[platform-vk] баннер не показан.',
           'тип:', (err && err.error_type) || '?',
