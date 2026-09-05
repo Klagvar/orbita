@@ -46,6 +46,9 @@
     // Висит ли сейчас баннер. Нужен только для отчётности: показ и скрытие
     // мы не чередуем, см. showBanner.
     this.bannerShown = false;
+    // Нужен ли баннер прямо сейчас. Заявку на показ отменить нечем, поэтому
+    // решение проверяется ещё раз в момент ответа — см. showBanner.
+    this._bannerWanted = false;
     this.onBannerClosed = null;
     // Награда, приехавшая позже, чем мы перестали её ждать. См. _showAd.
     this.onLateAd = null;
@@ -280,10 +283,13 @@
      которую режет площадка, либо в готовность игрока нажать кнопку. При
      одном показе на игрока, который мы намеряли, это главный рычаг.
 
-     Показываем один раз на старте и больше не трогаем. Прятать на время
-     забега заманчиво, но без layout_type ВК меняет размер окна, а мы на
-     это пересобираем канвас — посреди забега это подножка игроку. Одна
-     перестройка на загрузке стоит дешевле всех последующих.
+     Просьба показать баннер выполняется не сразу: ВК отвечает, когда
+     подберёт материал, а это секунды и даже десятки секунд. Отменить
+     заявку нечем — VKWebAppHideBannerAd прячет то, что уже показано, и
+     ничего не может сделать с тем, что ещё едет. Поэтому запоминаем, хотим
+     ли мы баннер прямо сейчас, и если к моменту ответа расхотели — прячем
+     сразу же. Без этого баннер, заказанный на экране смерти, всплывал
+     посреди следующего забега.
 
      banner_location: 'bottom' — низ у нас свободнее верха: сверху счёт,
      снизу только переключатель звука, и тот уедет вместе с канвасом. */
@@ -291,11 +297,18 @@
     var self = this;
     if (!this.sdk) return Promise.resolve(false);
 
+    this._bannerWanted = true;
     return this.sdk.send('VKWebAppShowBannerAd', { banner_location: 'bottom' })
       .then(function (data) {
         var ok = !!(data && data.result);
         self.bannerShown = ok;
         self.lastAdError = ok ? null : 'noresult';
+        if (ok && !self._bannerWanted) {
+          // Пока ВК думал, забег успел начаться. Убираем немедленно.
+          console.warn('[platform-vk] баннер приехал не вовремя — прячем');
+          self.hideBanner();
+          return false;
+        }
         if (!ok) {
           console.warn('[platform-vk] баннер — ответ без результата:',
             JSON.stringify(data));
@@ -317,6 +330,9 @@
 
   Platform.prototype.hideBanner = function () {
     var self = this;
+    // Отмечаем расхотели раньше всех проверок: даже если моста нет или
+    // прятать пока нечего, приехавший позже баннер уже не должен остаться.
+    this._bannerWanted = false;
     if (!this.sdk) return Promise.resolve(false);
     return this.sdk.send('VKWebAppHideBannerAd', {})
       .then(function () { self.bannerShown = false; return true; })
