@@ -1293,6 +1293,53 @@
     return o;
   }
 
+  /* Возрождение на последней пройденной звезде, с неё же снимается
+     хрупкость. Вынесено отдельно, потому что вызывается из двух мест: сразу
+     после просмотренного ролика и позже, если ответ площадки опоздал. */
+  function revive() {
+    continueUsed = true;
+    S.reward();
+
+    var host = null;
+    for (var i = stars.length - 1; i >= 0; i--) {
+      if (stars[i].visited && stars[i].decay !== -2) { host = stars[i]; break; }
+    }
+    if (!host) {
+      host = stars[0];
+      host.visited = true;
+    }
+    host.type = 'normal';
+    host.decay = -1;
+
+    trail = [];
+    attach(host, -Math.PI / 2, 1);
+    syncOrbitPosition();
+    camY = ball.y - 150;
+    ensureStars();
+    state = 'play';
+    P.gameplayStart();
+  }
+
+  /* Награда, которую площадка подтвердила уже после того, как игра перестала
+     её ждать. Игрок ролик посмотрел, значит он своё получает — вопрос лишь
+     в том, где он к этому моменту находится. Если всё ещё на экране смерти,
+     отдаём обещанное продолжение; если уже убежал играть дальше, монетами,
+     потому что возрождать посреди чужого забега нельзя. */
+  function onLateReward() {
+    A.event('ad', adInfo('reward', 'late', 1));
+    A.flush(false);
+    if (state === 'dead' && !continueUsed && score > 0) {
+      revive();
+      return;
+    }
+    var bonus = runCoins > 0 ? runCoins : 1;
+    save.coins += bonus;
+    runCoins = 0;
+    S.reward();
+    persist();
+    showToast('+' + bonus + ' ◈');
+  }
+
   function doContinue() {
     if (adBusy) return;
     adBusy = true;
@@ -1308,28 +1355,7 @@
         A.flush(false);
         return;
       }
-      continueUsed = true;
-      S.reward();
-
-      // Возрождаем на последней пройденной звезде, сняв с неё хрупкость.
-      var host = null;
-      for (var i = stars.length - 1; i >= 0; i--) {
-        if (stars[i].visited && stars[i].decay !== -2) { host = stars[i]; break; }
-      }
-      if (!host) {
-        host = stars[0];
-        host.visited = true;
-      }
-      host.type = 'normal';
-      host.decay = -1;
-
-      trail = [];
-      attach(host, -Math.PI / 2, 1);
-      syncOrbitPosition();
-      camY = ball.y - 150;
-      ensureStars();
-      state = 'play';
-      P.gameplayStart();
+      revive();
     }).catch(function () {
       adBusy = false;
       showToast(T.t('adFailed'));
@@ -1456,6 +1482,7 @@
          на экран загрузки, а показ меняет размер окна и пересобирает
          канвас. Пусть перестройка случится, пока смотреть не на что. */
       P.onBannerClosed = function () { A.event('ad', adInfo('banner', 'closed', 0)); };
+      P.onLateAd = onLateReward;
       P.showBanner().then(function (shown) {
         A.event('ad', adInfo('banner', 'boot', shown));
       });
